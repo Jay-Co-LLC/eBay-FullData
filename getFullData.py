@@ -1,7 +1,8 @@
 import os
 import datetime
 import requests
-import xlsxwriter
+import boto3
+import openpyxl as XL
 import xml.etree.ElementTree as ET
 
 baseurl = 'https://api.ebay.com/ws/api.dll'
@@ -16,10 +17,19 @@ baseparams = {
 authtoken = os.environ['key']
 userid = os.environ['userid']
 
+bucket = boto3.resource('s3').Bucket('ebayreports')
+
 today = datetime.datetime.now()
 future = today + datetime.timedelta(days=120)
 
 pre = '{urn:ebay:apis:eBLBaseComponents}'
+fields = [
+	'itemid',
+	'title',
+	'price',
+	'status',
+	'isPrivate'
+	]
 
 def getxml(page_number):
 	return """
@@ -76,23 +86,17 @@ def main(event, context):
 			
 		curPage = curPage + 1
 		
-	wb = xlsxwriter.Workbook(f'/tmp/{userid}.xlsx')
-	ws = wb.add_worksheet()
+	wb = XL.Workbook()
+	ws = wb.active
 	
-	ws.write(0,0,'itemid')
-	ws.write(0,1,'title')
-	ws.write(0,2,'price')
-	ws.write(0,3,'status')
-	ws.write(0,4,'isPrivate')
+	ws.append(fields)
 	
 	row = 1
 	
 	for eachListing in listings:
-		ws.write(row,0,eachListing['itemid'])
-		ws.write(row,1,eachListing['title'])
-		ws.write(row,2,eachListing['price'])
-		ws.write(row,3,eachListing['status'])
-		ws.write(row,4,eachListing['isPrivate'])
+		ws.append([eachListing[field] for field in fields])
 		row = row + 1
 	
-	wb.close()
+	wb.save('/tmp/file.xlsx')
+	
+	bucket.Object(f"{userid} - Full Listing Details - {today}.xlsx").put(Body=open("/tmp/file.xlsx", 'rb'))
