@@ -1,11 +1,8 @@
-import sys
 import os
 import datetime
 import requests
 import xlsxwriter
-import openpyxl as XL
 import xml.etree.ElementTree as ET
-import config
 
 baseurl = 'https://api.ebay.com/ws/api.dll'
 	
@@ -48,52 +45,54 @@ def getxml(page_number):
 
 listings = []
 
-curPage = numPages = 1
+def main(event, context):
 
-while (curPage <= numPages):
-	r = requests.post(baseurl, data=getxml(curPage), headers=baseparams)
-	root = ET.fromstring(r.content)
+	curPage = numPages = 1
 	
-	numPages = int(root.find(pre + 'PaginationResult').find(pre + 'TotalNumberOfPages').text)
-
-	itemArr = root.find(pre + 'ItemArray')
-
-	for eachItem in itemArr:
-		itemid = eachItem.find(pre + 'ItemID').text
-		title = eachItem.find(pre + 'Title').text
-		price = eachItem.find(pre + 'SellingStatus').find(pre + 'CurrentPrice').text
-		status = eachItem.find(pre + 'SellingStatus').find(pre + 'ListingStatus').text
-		isPrivate = eachItem.find(pre + 'PrivateListing').text
+	while (curPage <= numPages):
+		r = requests.post(baseurl, data=getxml(curPage), headers=baseparams)
+		root = ET.fromstring(r.content)
 		
-		toadd = {
-			'itemid' : itemid,
-			'title' : title,
-			'price' : price,
-			'status' : status,
-			'isPrivate' : isPrivate
-			}
+		numPages = int(root.find(pre + 'PaginationResult').find(pre + 'TotalNumberOfPages').text)
+	
+		itemArr = root.find(pre + 'ItemArray')
+	
+		for eachItem in itemArr:
+			itemid = eachItem.find(pre + 'ItemID').text
+			title = eachItem.find(pre + 'Title').text
+			price = eachItem.find(pre + 'SellingStatus').find(pre + 'CurrentPrice').text
+			status = eachItem.find(pre + 'SellingStatus').find(pre + 'ListingStatus').text
+			isPrivate = eachItem.find(pre + 'PrivateListing').text
 			
-		listings.append(toadd)
+			toadd = {
+				'itemid' : itemid,
+				'title' : title,
+				'price' : price,
+				'status' : status,
+				'isPrivate' : isPrivate
+				}
+				
+			listings.append(toadd)
+			
+		curPage = curPage + 1
 		
-	curPage = curPage + 1
+	wb = xlsxwriter.Workbook(f'/tmp/{userid}.xlsx')
+	ws = wb.add_worksheet()
 	
-wb = xlsxwriter.Workbook(f'{userid}.xlsx')
-ws = wb.add_worksheet()
-
-ws.write(0,0,'itemid')
-ws.write(0,1,'title')
-ws.write(0,2,'price')
-ws.write(0,3,'status')
-ws.write(0,4,'isPrivate')
-
-row = 1
-
-for eachListing in listings:
-	ws.write(row,0,eachListing['itemid'])
-	ws.write(row,1,eachListing['title'])
-	ws.write(row,2,eachListing['price'])
-	ws.write(row,3,eachListing['status'])
-	ws.write(row,4,eachListing['isPrivate'])
-	row = row + 1
-
-wb.close()
+	ws.write(0,0,'itemid')
+	ws.write(0,1,'title')
+	ws.write(0,2,'price')
+	ws.write(0,3,'status')
+	ws.write(0,4,'isPrivate')
+	
+	row = 1
+	
+	for eachListing in listings:
+		ws.write(row,0,eachListing['itemid'])
+		ws.write(row,1,eachListing['title'])
+		ws.write(row,2,eachListing['price'])
+		ws.write(row,3,eachListing['status'])
+		ws.write(row,4,eachListing['isPrivate'])
+		row = row + 1
+	
+	wb.close()
