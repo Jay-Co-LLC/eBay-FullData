@@ -7,9 +7,10 @@ from threading import RLock
 import openpyxl as XL
 import xml.etree.ElementTree as ET
 
-bucket = boto3.resource('s3').Bucket('ebayreports')
-key = os.environ['key']
-userid = os.environ['userid']
+client = boto3.resource('s3')
+bucket = client.Bucket('ebayreports')
+key = ''
+userid = ''
 
 url = 'https://api.ebay.com/ws/api.dll'
 
@@ -424,10 +425,18 @@ threads = []
 allItemIds = []
 
 def main(event, context):
+	
+	name = event['queryStringParameters']['name']
+
+	global userid
+	global key
+	
+	userid = name
+	key = os.environ[f"{name}_key"]
+	
 	getAllItemIds()
 		
 	for listOfItemIds in allItemIds:
-		print("creating thread")
 		t = Thread(target=getItems, args=(listOfItemIds,))
 		threads.append(t)
 		
@@ -437,5 +446,15 @@ def main(event, context):
 	for t in threads:
 		t.join()
 		
+	
+	# Write file to temp local storage
 	outwb.save('/tmp/out.xlsx')
-	bucket.Object(f"{userid} - Full Listing Details - {today}.xlsx").put(Body=open("/tmp/out.xlsx", 'rb'))
+	
+	# Copy file from temp local storage to S3
+	key = f"FullData/{userid}/{today}.xlsx"
+	bucket.Object(key).put(Body=open("/tmp/out.xlsx", 'rb'))
+	
+	# Set permissions to allow public read access for downloading from dashboard
+	objAcl = client.ObjectAcl('ebayreports', key)
+	objAcl.put(ACL='public-read')
+	
