@@ -2,6 +2,7 @@ import os
 import datetime
 import requests
 import boto3
+import logging
 from threading import Thread
 from threading import RLock
 import openpyxl as XL
@@ -9,6 +10,10 @@ import xml.etree.ElementTree as ET
 
 client = boto3.resource('s3')
 bucket = client.Bucket('ebayreports')
+
+logger = logging.getLogger()
+logger.setLevel(logging.ERROR)
+
 key = ''
 userid = ''
 
@@ -28,7 +33,7 @@ getAllItemsParams = {
 	'X-EBAY-API-SITEID' : '0'
 	}
 
-today = datetime.datetime.now()
+today = datetime.datetime.now() - datetime.timedelta(hours=7)
 future = today + datetime.timedelta(days=120)
 
 def P(str):
@@ -96,7 +101,7 @@ def getAllItemIds():
 	
 	while (cur_page <= tot_pages):
 		r = requests.post(url, data=getAllItemIdsXML(cur_page), headers=getAllItemIdsParams)
-	
+		
 		root = ET.fromstring(r.content)
 	
 		tot_pages = int(root.find(P('PaginationResult')).find(P('TotalNumberOfPages')).text)
@@ -425,9 +430,9 @@ threads = []
 allItemIds = []
 
 def main(event, context):
-	
-	name = event['queryStringParameters']['name']
 
+	name = event['name']
+		
 	global userid
 	global key
 	
