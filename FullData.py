@@ -2,6 +2,7 @@ import os
 import datetime
 import requests
 import boto3
+import json
 import logging
 from threading import Thread
 from threading import RLock
@@ -10,6 +11,7 @@ import xml.etree.ElementTree as ET
 
 client = boto3.resource('s3')
 bucket = client.Bucket('ebayreports')
+sqs = boto3.resource('sqs')
 
 logger = logging.getLogger()
 logger.setLevel(logging.ERROR)
@@ -99,16 +101,22 @@ def getAllItemIds():
 
 	itemids = []
 	
+	logger.info(f"[{userid}] Starting getAllItemIds...")
+	
 	while (cur_page <= tot_pages):
+		logger.info(f"[{userid}] Calling GetSellerList - Page {cur_page}")
 		r = requests.post(url, data=getAllItemIdsXML(cur_page), headers=getAllItemIdsParams)
+		
+		logger.info(f"[{userid}] Response code: {r.status_code}")
+		
+		if (r.status_code != 200):
+			logger.error(f"[{userid}] Response: {r.text}")
 		
 		root = ET.fromstring(r.content)
 	
 		tot_pages = int(root.find(P('PaginationResult')).find(P('TotalNumberOfPages')).text)
 	
 		itemArr = root.find(P('ItemArray'))
-		
-		print("Looping")
 	
 		for eachItem in itemArr:
 			itemid = eachItem.find(P('ItemID')).text
@@ -124,7 +132,14 @@ def getAllItemIds():
 
 def getItems(listOfItemIds):
 	for eachItemId in listOfItemIds:
+		logger.info(f"[{userid}] Calling GetItem for {eachItemId}")
 		r = requests.post(url, data=getAllItemsXML(eachItemId), headers=getAllItemsParams)
+		
+		logger.info(f"[{userid}] Response code: {r.status_code}")
+		
+		if (r.status_code != 200):
+			logger.error(f"[{userid}] Response: {r.text}")
+		
 		root = ET.fromstring(r.content)
 		item = root.find(P('Item'))
 
@@ -352,7 +367,7 @@ def getItems(listOfItemIds):
 		wbLock.acquire()
 		
 		try:
-			print('writing to file')
+			logger.info(f"[{userid}] Writing {toAdd['itemid']} to file")
 			outws.append([value for key, value in toAdd.items()])
 		finally:
 			wbLock.release()
@@ -430,36 +445,70 @@ threads = []
 allItemIds = []
 
 def main(event, context):
-
-	name = event['name']
 		
-	global userid
-	global key
+	# Remove any messages already in the queue before starting
+	q = sqs.get_queue_by_name(QueueName='LambdaResultsQueue')
 	
-	userid = name
-	key = os.environ[f"{name}_key"]
+	# Remove any messages currently in the queue
+	msgs = q.receive_messages()
+	if (len(msgs) > 0):
+		for m in msgs:
+			m.delete()
 	
-	getAllItemIds()
+	try:
+		name = event['name']
 		
-	for listOfItemIds in allItemIds:
-		t = Thread(target=getItems, args=(listOfItemIds,))
-		threads.append(t)
+		global userid
+		global key
 		
-	for t in threads:
-		t.start()
+		userid = name
+		key = os.environ[f"{name}_key"]
 		
-	for t in threads:
-		t.join()
+		getAllItemIds()
+			
+		for listOfItemIds in allItemIds:
+			t = Thread(target=getItems, args=(listOfItemIds,))
+			threads.append(t)
+			
+		for t in threads:
+			t.start()
+			
+		for t in threads:
+			t.join()
+			
+			
+		logger.info(f"[{userid}] Writing file to /tmp/")
+		# Write file to temp local storage
+		outwb.save('/tmp/out.xlsx')
 		
-	
-	# Write file to temp local storage
-	outwb.save('/tmp/out.xlsx')
-	
-	# Copy file from temp local storage to S3
-	key = f"FullData/{userid}/{today}.xlsx"
-	bucket.Object(key).put(Body=open("/tmp/out.xlsx", 'rb'))
-	
-	# Set permissions to allow public read access for downloading from dashboard
-	objAcl = client.ObjectAcl('ebayreports', key)
-	objAcl.put(ACL='public-read')
+		logger.info(f"[{userid}] Copying file from /tmp/ to S3")
+		# Copy file from temp local storage to S3
+		key = f"FullData/{userid}/{today}.xlsx"
+		bucket.Object(key).put(Body=open("/tmp/out.xlsx", 'rb'))
+		
+		logger.info(f"[{userid}] Setting public-read permissions on file")
+		# Set permissions to allow public read access for downloading from dashboard
+		objAcl = client.ObjectAcl('ebayreports', key)
+		objAcl.put(ACL='public-read')
+		
+		logger.info(f"[{userid}] Done")
+		
+		# Log the success in the SQS queue
+		r = q.send_message(MessageBody='SUCCESS')
+		
+		
+	except Exception as e:
+		# Log the error to CloudWatch
+		logger.error(e)
+		
+		# Put the error into the SQS queue
+		r = q.send_message(MessageBody='FAILURE')
+		
+		return {
+			'statusCode' : 404,
+			'headers' : {
+                    'Access-Control-Allow-Origin' : '*'
+                },
+			'body' : json.dumps('Error running getFullData')
+		}
 	
